@@ -20,6 +20,7 @@ class EacharePeer:
             for line in f:
                 peer = line.strip()
                 if peer:
+                    //Adicionar verificação se o Peer sou eu mesmo.
                     self.peers[peer] = "OFFLINE"
                     print(f"Adicionando novo peer {peer} status OFFLINE")
 
@@ -65,6 +66,7 @@ class EacharePeer:
                 self.peers[peer] = status
         else:
             print(f"Adicionando novo peer {peer} status {status}")
+            //Adicionar os peers para o arquivo peers.
             self.peers[peer] = status
 
     def send_message(self, destination, message):
