@@ -14,13 +14,14 @@ class EacharePeer:
         self.clock_lock = threading.Lock()
         self.shared_dir = shared_dir
         self.running = True
+        self.neighbors_file = neighbors_file
 
         # Carregar peers iniciais
         with open(neighbors_file, 'r') as f:
             for line in f:
                 peer = line.strip()
                 if peer:
-                    //Adicionar verificação se o Peer sou eu mesmo.
+                    #Adicionar verificação se o Peer sou eu mesmo.
                     self.peers[peer] = "OFFLINE"
                     print(f"Adicionando novo peer {peer} status OFFLINE")
 
@@ -66,7 +67,7 @@ class EacharePeer:
                 self.peers[peer] = status
         else:
             print(f"Adicionando novo peer {peer} status {status}")
-            //Adicionar os peers para o arquivo peers.
+            #Adicionar os peers para o arquivo peers.
             self.peers[peer] = status
 
     def send_message(self, destination, message):
@@ -95,7 +96,21 @@ class EacharePeer:
             peer_info = peers_data[i].split(':')
             peer_addr = f"{peer_info[0]}:{peer_info[1]}"
             status = peer_info[2]
+            self.add_peer(peer_addr)
             self.update_peer_status(peer_addr, status)
+
+    def is_peer_in_file(self, peer_address):
+        for i in self.peers:
+            if i == peer_address:
+                return i
+
+    def add_peer(self, peer_address):
+        if not self.is_peer_in_file(peer_address):
+            self.add_peer_to_neighbors_file(peer_address)
+
+    def add_peer_to_neighbors_file(self, peer_address):
+        with open(self.neighbors_file, 'a') as file:
+            file.write(f"\n{peer_address}")
 
     def list_peers(self):
         print("Lista de peers:")
