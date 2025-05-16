@@ -9,23 +9,20 @@ class EacharePeer:
         self.address = address
         self.port = port
         self.full_address = f"{address}:{port}"
-        self.peers = {}  # {address: (status, last_updated)}
+        self.peers = {}  # {address: {"status": "ONLINE"/"OFFLINE", "clock": int}}
         self.clock = 0
         self.clock_lock = threading.Lock()
         self.shared_dir = shared_dir
         self.running = True
         self.neighbors_file = neighbors_file
 
-        # Carregar peers iniciais
         with open(neighbors_file, 'r') as f:
             for line in f:
                 peer = line.strip()
-                if peer:
-                    #Adicionar verificação se o Peer sou eu mesmo.
-                    self.peers[peer] = "OFFLINE"
+                if peer and peer != self.full_address:
+                    self.peers[peer] = {"status": "OFFLINE", "clock": 0}
                     print(f"Adicionando novo peer {peer} status OFFLINE")
 
-        # Configurar socket do servidor
         self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server_socket.bind((address, port))
         self.server_socket.listen(5)
@@ -41,34 +38,39 @@ class EacharePeer:
             return
 
         print(f"Mensagem recebida: \"{data}\"")
-        self.increment_clock()
 
         parts = data.strip().split()
         origin = parts[0]
         msg_clock = int(parts[1])
         msg_type = parts[2]
 
+        with self.clock_lock:
+            self.clock = max(msg_clock, self.clock)
+        self.increment_clock()
+
         if msg_type == "HELLO":
-            self.update_peer_status(origin, "ONLINE")
+            self.update_peer_status(origin, "ONLINE", msg_clock)
         elif msg_type == "GET_PEERS":
             response = self.create_peer_list_response(origin)
             self.send_message(origin, response)
         elif msg_type == "PEER_LIST":
             self.process_peer_list(parts[3:])
         elif msg_type == "BYE":
-            self.update_peer_status(origin, "OFFLINE")
+            self.update_peer_status(origin, "OFFLINE", msg_clock)
 
         conn.close()
 
-    def update_peer_status(self, peer, status):
-        if peer in self.peers:
-            if self.peers[peer] != status:
-                print(f"Atualizando peer {peer} status {status}")
-                self.peers[peer] = status
+    def update_peer_status(self, peer, status, pClock):
+        current = self.peers.get(peer)
+        if current:
+            if pClock > current["clock"]:
+                if current["status"] != status:
+                    print(f"Atualizando peer {peer} status {status} (clock {pClock})")
+                self.peers[peer] = {"status": status, "clock": pClock}
         else:
-            print(f"Adicionando novo peer {peer} status {status}")
-            #Adicionar os peers para o arquivo peers.
-            self.peers[peer] = status
+            print(f"Adicionando novo peer {peer} status {status} (clock {pClock})")
+            self.peers[peer] = {"status": status, "clock": pClock}
+            self.add_peer_to_neighbors_file(peer)
 
     def send_message(self, destination, message):
         try:
@@ -78,16 +80,16 @@ class EacharePeer:
                 s.connect((addr, int(port)))
                 s.sendall(message.encode())
                 print(f"Encaminhando mensagem \"{message}\" para {destination}")
-                self.update_peer_status(destination, "ONLINE")
+                self.update_peer_status(destination, "ONLINE", self.clock)
         except Exception as e:
             print(f"Erro ao conectar em {destination}: {str(e)}")
-            self.update_peer_status(destination, "OFFLINE")
+            self.update_peer_status(destination, "OFFLINE", self.clock)
 
     def create_peer_list_response(self, exclude_peer):
         peer_list = []
-        for peer in self.peers:
+        for peer, info in self.peers.items():
             if peer != exclude_peer:
-                peer_list.append(f"{peer}:{self.peers[peer]}:0")
+                peer_list.append(f"{peer}:{info['status']}:{info['clock']}")
         return f"{self.full_address} {self.clock} PEER_LIST {len(peer_list)} {' '.join(peer_list)}"
 
     def process_peer_list(self, peers_data):
@@ -96,13 +98,12 @@ class EacharePeer:
             peer_info = peers_data[i].split(':')
             peer_addr = f"{peer_info[0]}:{peer_info[1]}"
             status = peer_info[2]
+            clock = int(peer_info[3])
             self.add_peer(peer_addr)
-            self.update_peer_status(peer_addr, status)
+            self.update_peer_status(peer_addr, status, clock)
 
     def is_peer_in_file(self, peer_address):
-        for i in self.peers:
-            if i == peer_address:
-                return i
+        return peer_address in self.peers
 
     def add_peer(self, peer_address):
         if not self.is_peer_in_file(peer_address):
@@ -116,8 +117,8 @@ class EacharePeer:
         print("Lista de peers:")
         print("[0] voltar para o menu anterior")
         peers = list(self.peers.items())
-        for i, (peer, status) in enumerate(peers, 1):
-            print(f"[{i}] {peer} {status}")
+        for i, (peer, info) in enumerate(peers, 1):
+            print(f"[{i}] {peer} {info['status']} (clock={info['clock']})")
 
         choice = int(input("> "))
         if choice == 0:
@@ -143,8 +144,8 @@ class EacharePeer:
     def exit(self):
         self.increment_clock()
         message = f"{self.full_address} {self.clock} BYE"
-        for peer, status in self.peers.items():
-            if status == "ONLINE":
+        for peer, info in self.peers.items():
+            if info["status"] == "ONLINE":
                 self.send_message(peer, message)
         self.running = False
         print("Saindo...")
@@ -162,6 +163,7 @@ class EacharePeer:
             print("[1] Listar peers")
             print("[2] Obter peers")
             print("[3] Listar arquivos locais")
+            print ("[4] Buscar Arquivos")
             print("[9] Sair")
             choice = input("> ")
 
