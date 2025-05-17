@@ -39,7 +39,7 @@ class EacharePeer:
         if not data:
             return
 
-        print(f"Mensagem recebida: \"{data}\"")
+        print(f"Resposta recebida: \"{data}\"")
 
         parts = data.strip().split()
         origin = parts[0]
@@ -84,6 +84,7 @@ class EacharePeer:
         return f"{self.full_address} {self.clock} LS_LIST {len(arquivos)} {' '.join(arquivos)}"
 
     def process_ls_list(self, peer, file_data):
+        self.update_peer_status(peer, "ONLINE", self.clock)  # <- ADICIONE ESTA LINHA
         num = int(file_data[0])
         arquivos = []
         for i in range(1, num + 1):
@@ -111,9 +112,10 @@ class EacharePeer:
             print("Nenhum arquivo encontrado.")
             return
 
-        print("\nArquivos disponíveis:")
+        print("\nArquivos encontrados na rede:")
+        print("     Nome        | Tamanho  | Peer ")
         for i, (nome, tamanho, peer) in enumerate(todos_arquivos, 1):
-            print(f"[{i}] {nome} ({tamanho} bytes) - {peer}")
+            print(f"[{i}]  {nome}  | {tamanho}      | {peer}")
 
         print("[0] Cancelar")
         escolha = int(input("> "))
@@ -146,6 +148,7 @@ class EacharePeer:
             with open(caminho, 'wb') as f:
                 f.write(decoded)
             print(f"Download do arquivo {filename} finalizado.")
+            self.start()
         except Exception as e:
             print(f"Erro ao salvar o arquivo {filename}: {str(e)}")
 
@@ -207,7 +210,7 @@ class EacharePeer:
         print("[0] voltar para o menu anterior")
         peers = list(self.peers.items())
         for i, (peer, info) in enumerate(peers, 1):
-            print(f"[{i}] {peer} {info['status']} (clock={info['clock']})")
+            print(f"[{i}] {peer} {info['status']} {info['clock']}")
 
         choice = int(input("> "))
         if choice == 0:
