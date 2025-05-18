@@ -2,6 +2,7 @@ import os
 import socket
 import threading
 import time
+import base64
 from datetime import datetime
 
 class EacharePeer:
@@ -9,23 +10,21 @@ class EacharePeer:
         self.address = address
         self.port = port
         self.full_address = f"{address}:{port}"
-        self.peers = {}  # {address: (status, last_updated)}
+        self.peers = {}  # {address: {"status": "ONLINE"/"OFFLINE", "clock": int}}
         self.clock = 0
         self.clock_lock = threading.Lock()
         self.shared_dir = shared_dir
         self.running = True
         self.neighbors_file = neighbors_file
+        self.arquivos_recebidos = {}  # {peer: [(nome, tamanho), ...]}
 
-        # Carregar peers iniciais
         with open(neighbors_file, 'r') as f:
             for line in f:
                 peer = line.strip()
-                if peer:
-                    #Adicionar verificação se o Peer sou eu mesmo.
-                    self.peers[peer] = "OFFLINE"
+                if peer and peer != self.full_address:
+                    self.peers[peer] = {"status": "OFFLINE", "clock": 0}
                     print(f"Adicionando novo peer {peer} status OFFLINE")
 
-        # Configurar socket do servidor
         self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server_socket.bind((address, port))
         self.server_socket.listen(5)
@@ -36,39 +35,134 @@ class EacharePeer:
             print(f"=> Atualizando relogio para {self.clock}")
 
     def handle_message(self, conn, addr):
-        data = conn.recv(1024).decode()
+        data = conn.recv(1024 * 100).decode()
         if not data:
             return
 
-        print(f"Mensagem recebida: \"{data}\"")
-        self.increment_clock()
+        print(f"Resposta recebida: \"{data}\"")
 
         parts = data.strip().split()
         origin = parts[0]
         msg_clock = int(parts[1])
         msg_type = parts[2]
 
+        with self.clock_lock:
+            self.clock = max(msg_clock, self.clock)
+        self.increment_clock()
+
         if msg_type == "HELLO":
-            self.update_peer_status(origin, "ONLINE")
+            self.update_peer_status(origin, "ONLINE", msg_clock)
         elif msg_type == "GET_PEERS":
             response = self.create_peer_list_response(origin)
             self.send_message(origin, response)
         elif msg_type == "PEER_LIST":
             self.process_peer_list(parts[3:])
         elif msg_type == "BYE":
-            self.update_peer_status(origin, "OFFLINE")
+            self.update_peer_status(origin, "OFFLINE", msg_clock)
+        elif msg_type == "LS":
+            response = self.create_ls_list_response()
+            self.send_message(origin, response)
+        elif msg_type == "LS_LIST":
+            self.process_ls_list(origin, parts[3:])
+        elif msg_type == "DL":
+            filename = parts[3]
+            self.send_file_response(origin, filename)
+        elif msg_type == "FILE":
+            filename = parts[3]
+            encoded_data = parts[6]
+            self.save_downloaded_file(filename, encoded_data)
 
         conn.close()
 
-    def update_peer_status(self, peer, status):
-        if peer in self.peers:
-            if self.peers[peer] != status:
-                print(f"Atualizando peer {peer} status {status}")
-                self.peers[peer] = status
+    def create_ls_list_response(self):
+        arquivos = []
+        for f in os.listdir(self.shared_dir):
+            caminho = os.path.join(self.shared_dir, f)
+            if os.path.isfile(caminho):
+                tamanho = os.path.getsize(caminho)
+                arquivos.append(f"{f}:{tamanho}")
+        return f"{self.full_address} {self.clock} LS_LIST {len(arquivos)} {' '.join(arquivos)}"
+
+    def process_ls_list(self, peer, file_data):
+        self.update_peer_status(peer, "ONLINE", self.clock)  # <- ADICIONE ESTA LINHA
+        num = int(file_data[0])
+        arquivos = []
+        for i in range(1, num + 1):
+            nome, tamanho = file_data[i].split(':')
+            arquivos.append((nome, int(tamanho)))
+        self.arquivos_recebidos[peer] = arquivos
+
+    def buscar_arquivos(self):
+        self.arquivos_recebidos = {}
+        self.increment_clock()
+        message = f"{self.full_address} {self.clock} LS"
+
+        for peer, info in self.peers.items():
+            if info["status"] == "ONLINE":
+                self.send_message(peer, message)
+
+        time.sleep(2)  # tempo para receber respostas
+
+        todos_arquivos = []
+        for peer, arquivos in self.arquivos_recebidos.items():
+            for nome, tamanho in arquivos:
+                todos_arquivos.append((nome, tamanho, peer))
+
+        if not todos_arquivos:
+            print("Nenhum arquivo encontrado.")
+            return
+
+        print("\nArquivos encontrados na rede:")
+        print("     Nome        | Tamanho  | Peer ")
+        for i, (nome, tamanho, peer) in enumerate(todos_arquivos, 1):
+            print(f"[{i}]  {nome}  | {tamanho}      | {peer}")
+
+        print("[0] Cancelar")
+        escolha = int(input("> "))
+        if escolha == 0:
+            return
+
+        selecionado = todos_arquivos[escolha - 1]
+        print(f"Você selecionou: {selecionado[0]} de {selecionado[2]}")
+
+        self.increment_clock()
+        msg = f"{self.full_address} {self.clock} DL {selecionado[0]} 0 0"
+        self.send_message(selecionado[2], msg)
+
+    def send_file_response(self, destination, filename):
+        caminho = os.path.join(self.shared_dir, filename)
+        try:
+            with open(caminho, 'rb') as f:
+                data = f.read()
+                encoded = base64.b64encode(data).decode()
+                self.increment_clock()
+                msg = f"{self.full_address} {self.clock} FILE {filename} 0 0 {encoded}"
+                self.send_message(destination, msg)
+        except FileNotFoundError:
+            print(f"Arquivo {filename} não encontrado para envio")
+
+    def save_downloaded_file(self, filename, encoded_data):
+        try:
+            decoded = base64.b64decode(encoded_data.encode())
+            caminho = os.path.join(self.shared_dir, filename)
+            with open(caminho, 'wb') as f:
+                f.write(decoded)
+            print(f"Download do arquivo {filename} finalizado.")
+            self.start()
+        except Exception as e:
+            print(f"Erro ao salvar o arquivo {filename}: {str(e)}")
+
+    def update_peer_status(self, peer, status, pClock):
+        current = self.peers.get(peer)
+        if current:
+            if pClock > current["clock"]:
+                if current["status"] != status:
+                    print(f"Atualizando peer {peer} status {status} (clock {pClock})")
+                self.peers[peer] = {"status": status, "clock": pClock}
         else:
-            print(f"Adicionando novo peer {peer} status {status}")
-            #Adicionar os peers para o arquivo peers.
-            self.peers[peer] = status
+            print(f"Adicionando novo peer {peer} status {status} (clock {pClock})")
+            self.peers[peer] = {"status": status, "clock": pClock}
+            self.add_peer_to_neighbors_file(peer)
 
     def send_message(self, destination, message):
         try:
@@ -78,16 +172,16 @@ class EacharePeer:
                 s.connect((addr, int(port)))
                 s.sendall(message.encode())
                 print(f"Encaminhando mensagem \"{message}\" para {destination}")
-                self.update_peer_status(destination, "ONLINE")
+                self.update_peer_status(destination, "ONLINE", self.clock)
         except Exception as e:
             print(f"Erro ao conectar em {destination}: {str(e)}")
-            self.update_peer_status(destination, "OFFLINE")
+            self.update_peer_status(destination, "OFFLINE", self.clock)
 
     def create_peer_list_response(self, exclude_peer):
         peer_list = []
-        for peer in self.peers:
+        for peer, info in self.peers.items():
             if peer != exclude_peer:
-                peer_list.append(f"{peer}:{self.peers[peer]}:0")
+                peer_list.append(f"{peer}:{info['status']}:{info['clock']}")
         return f"{self.full_address} {self.clock} PEER_LIST {len(peer_list)} {' '.join(peer_list)}"
 
     def process_peer_list(self, peers_data):
@@ -96,13 +190,12 @@ class EacharePeer:
             peer_info = peers_data[i].split(':')
             peer_addr = f"{peer_info[0]}:{peer_info[1]}"
             status = peer_info[2]
+            clock = int(peer_info[3])
             self.add_peer(peer_addr)
-            self.update_peer_status(peer_addr, status)
+            self.update_peer_status(peer_addr, status, clock)
 
     def is_peer_in_file(self, peer_address):
-        for i in self.peers:
-            if i == peer_address:
-                return i
+        return peer_address in self.peers
 
     def add_peer(self, peer_address):
         if not self.is_peer_in_file(peer_address):
@@ -116,8 +209,8 @@ class EacharePeer:
         print("Lista de peers:")
         print("[0] voltar para o menu anterior")
         peers = list(self.peers.items())
-        for i, (peer, status) in enumerate(peers, 1):
-            print(f"[{i}] {peer} {status}")
+        for i, (peer, info) in enumerate(peers, 1):
+            print(f"[{i}] {peer} {info['status']} {info['clock']}")
 
         choice = int(input("> "))
         if choice == 0:
@@ -143,8 +236,8 @@ class EacharePeer:
     def exit(self):
         self.increment_clock()
         message = f"{self.full_address} {self.clock} BYE"
-        for peer, status in self.peers.items():
-            if status == "ONLINE":
+        for peer, info in self.peers.items():
+            if info["status"] == "ONLINE":
                 self.send_message(peer, message)
         self.running = False
         print("Saindo...")
@@ -162,6 +255,7 @@ class EacharePeer:
             print("[1] Listar peers")
             print("[2] Obter peers")
             print("[3] Listar arquivos locais")
+            print("[4] Buscar Arquivos")
             print("[9] Sair")
             choice = input("> ")
 
@@ -171,6 +265,8 @@ class EacharePeer:
                 self.get_peers()
             elif choice == '3':
                 self.list_local_files()
+            elif choice == '4':
+                self.buscar_arquivos()
             elif choice == '9':
                 self.exit()
                 break
