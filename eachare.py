@@ -10,13 +10,13 @@ class EacharePeer:
         self.address = address
         self.port = port
         self.full_address = f"{address}:{port}"
-        self.peers = {}  # {address: {"status": "ONLINE"/"OFFLINE", "clock": int}}
+        self.peers = {}  
         self.clock = 0
         self.clock_lock = threading.Lock()
         self.shared_dir = shared_dir
         self.running = True
         self.neighbors_file = neighbors_file
-        self.arquivos_recebidos = {}  # {peer: [(nome, tamanho), ...]}
+        self.arquivos_recebidos = {}  
 
         with open(neighbors_file, 'r') as f:
             for line in f:
@@ -84,7 +84,7 @@ class EacharePeer:
         return f"{self.full_address} {self.clock} LS_LIST {len(arquivos)} {' '.join(arquivos)}"
 
     def process_ls_list(self, peer, file_data):
-        self.update_peer_status(peer, "ONLINE", self.clock)  # <- ADICIONE ESTA LINHA
+        self.update_peer_status(peer, "ONLINE", self.clock) 
         num = int(file_data[0])
         arquivos = []
         for i in range(1, num + 1):
