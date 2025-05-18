@@ -1,0 +1,3 @@
+python eachare.py 127.0.0.1:9000 peers.txt diretorio_compartilhado
+python eachare.py 127.0.0.1:9001 peers1.txt diretorio_compartilhado1
+python eachare.py 127.0.0.1:9002 peers2.txt diretorio_compartilhado2

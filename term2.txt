@@ -1,0 +1,145 @@
+cd[bruno@archlinux-lenovo ~]$ cd EACHare
+[bruno@archlinux-lenovo EACHare]$ python eachare.py 127.0.0.1:9000 peers.txt diretorio_compartilhado
+Adicionando novo peer 127.0.0.1:9001 status OFFLINE
+Adicionando novo peer 127.0.0.1:9002 status OFFLINE
+Adicionando novo peer 192.168.0.1:10000 status OFFLINE
+
+Escolha um comando:
+[1] Listar peers
+[2] Obter peers
+[3] Listar arquivos locais
+[4] Buscar Arquivos
+[9] Sair
+> 1
+Lista de peers:
+[0] voltar para o menu anterior
+[1] 127.0.0.1:9001 OFFLINE 0
+[2] 127.0.0.1:9002 OFFLINE 0
+[3] 192.168.0.1:10000 OFFLINE 0
+> 0
+
+Escolha um comando:
+[1] Listar peers
+[2] Obter peers
+[3] Listar arquivos locais
+[4] Buscar Arquivos
+[9] Sair
+> 2Resposta recebida: "127.0.0.1:9002 1 GET_PEERS"
+=> Atualizando relogio para 2
+Encaminhando mensagem "127.0.0.1:9000 2 PEER_LIST 2 127.0.0.1:9001:OFFLINE:0 192.168.0.1:10000:OFFLINE:0" para 127.0.0.1:9002
+[bruno@archlinux-lenovo EACHare]$ python eachare.py 127.0.0.1:9002 peers2.txt diretorio_compartilhado2
+Adicionando novo peer 127.0.0.1:9000 status OFFLINE
+Adicionando novo peer 127.0.0.1:9001 status OFFLINE
+Adicionando novo peer 192.168.0.1:10002 status OFFLINE
+Adicionando novo peer 192.168.0.1:10000 status OFFLINE
+Adicionando novo peer 192.168.0.1:10001 status OFFLINE
+Adicionando novo peer 192.168.0.1:10000 status OFFLINE
+Adicionando novo peer 192.168.0.1:10001 status OFFLINE
+
+Escolha um comando:
+[1] Listar peers
+[bruno@archlinux-lenovo EACHare]$ python eachare.py 127.0.0.1:9002 peers2.txt diretorio_compartilhado2
+Adicionando novo peer 127.0.0.1:9000 status OFFLINE
+Adicionando novo peer 127.0.0.1:9001 status OFFLINE
+Adicionando novo peer 192.168.0.1:10 status OFFLINE
+
+Escolha um comando:
+[1] Listar peers
+[2] Obter peers
+[3] Listar arquivos locais
+[4] Buscar Arquivos
+[9] Sair
+> Resposta recebida: "127.0.0.1:9000 2 HELLO"
+=> Atualizando relogio para 3
+Atualizando peer 127.0.0.1:9000 status ONLINE (clock 2)
+Resposta recebida: "127.0.0.1:9001 3 HELLO"
+=> Atualizando relogio para 4
+Atualizando peer 127.0.0.1:9001 status ONLINE (clock 3)
+3
+Arquivos locais:
+2025-05-08-114433_hyprshot.png
+
+Escolha um comando:
+[1] Listar peers
+[2] Obter peers
+[3] Listar arquivos locais
+[4] Buscar Arquivos
+[9] Sair
+> 4
+=> Atualizando relogio para 5
+Encaminhando mensagem "127.0.0.1:9002 5 LS" para 127.0.0.1:9000
+Encaminhando mensagem "127.0.0.1:9002 5 LS" para 127.0.0.1:9001
+Resposta recebida: "127.0.0.1:9000 6 LS_LIST 1 HELLO.txt:3"
+=> Atualizando relogio para 7
+Resposta recebida: "127.0.0.1:9001 6 LS_LIST 2 Apresentação Básica Minimalista Preto e Branco.pdf:11200550 2025-05-08-114433_hyprshot.png:43670"
+=> Atualizando relogio para 8
+Exception in thread Thread-5 (handle_message):
+Traceback (most recent call last):
+  File "/usr/lib/python3.13/threading.py", line 1041, in _bootstrap_inner
+    self.run()
+    ~~~~~~~~^^
+  File "/usr/lib/python3.13/threading.py", line 992, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/bruno/EACHare/eachare.py", line 66, in handle_message
+    self.process_ls_list(origin, parts[3:])
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+  File "/home/bruno/EACHare/eachare.py", line 91, in process_ls_list
+    nome, tamanho = file_data[i].split(':')
+    ^^^^^^^^^^^^^
+ValueError: not enough values to unpack (expected 2, got 1)
+
+Arquivos encontrados na rede:
+     Nome        | Tamanho  | Peer 
+[1]  HELLO.txt  | 3      | 127.0.0.1:9000
+[0] Cancelar
+> 1
+Você selecionou: HELLO.txt de 127.0.0.1:9000
+=> Atualizando relogio para 9
+Encaminhando mensagem "127.0.0.1:9002 9 DL HELLO.txt 0 0" para 127.0.0.1:9000
+
+Escolha um comando:
+[1] Listar peers
+[2] Obter peers
+[3] Listar arquivos locais
+[4] Buscar Arquivos
+[9] Sair
+> Resposta recebida: "127.0.0.1:9000 11 FILE HELLO.txt 0 0 b2xh"
+=> Atualizando relogio para 12
+Download do arquivo HELLO.txt finalizado.
+
+Escolha um comando:
+[1] Listar peers
+[2] Obter peers
+[3] Listar arquivos locais
+[4] Buscar Arquivos
+[9] Sair
+Resposta recebida: "127.0.0.1:9001 8 LS"
+=> Atualizando relogio para 13
+Encaminhando mensagem "127.0.0.1:9002 13 LS_LIST 2 2025-05-08-114433_hyprshot.png:43670 HELLO.txt:3" para 127.0.0.1:9001
+3
+> Arquivos locais:
+2025-05-08-114433_hyprshot.png
+HELLO.txt
+
+Escolha um comando:
+[1] Listar peers
+[2] Obter peers
+[3] Listar arquivos locais
+[4] Buscar Arquivos
+[9] Sair
+9
+> => Atualizando relogio para 14
+Encaminhando mensagem "127.0.0.1:9002 14 BYE" para 127.0.0.1:9000
+Encaminhando mensagem "127.0.0.1:9002 14 BYE" para 127.0.0.1:9001
+Saindo...
+Resposta recebida: "127.0.0.1:9001 22 BYE"
+=> Atualizando relogio para 23
+Atualizando peer 127.0.0.1:9001 status OFFLINE (clock 22)
+Resposta recebida: "127.0.0.1:9001 23 BYE"
+=> Atualizando relogio para 24
+9
+=> Atualizando relogio para 25
+Erro ao conectar em 127.0.0.1:9000: [Errno 111] Connection refused
+Atualizando peer 127.0.0.1:9000 status OFFLINE (clock 25)
+Saindo...
