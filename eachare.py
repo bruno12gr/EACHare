@@ -3,20 +3,34 @@ import socket
 import threading
 import time
 import base64
-from datetime import datetime
+import math
+from collections import defaultdict
+
 
 class EacharePeer:
     def __init__(self, address, port, neighbors_file, shared_dir):
         self.address = address
         self.port = port
         self.full_address = f"{address}:{port}"
-        self.peers = {}  
+        self.peers = {}
         self.clock = 0
         self.clock_lock = threading.Lock()
         self.shared_dir = shared_dir
         self.running = True
         self.neighbors_file = neighbors_file
-        self.arquivos_recebidos = {}  
+        self.arquivos_recebidos = {}
+        self.chunk_size = 256  # Valor enunciado
+
+        # Estatísticas de transferência
+        self.estatisticas_transferencia = {
+            'chunks_enviados': 0,
+            'chunks_recebidos': 0,
+            'bytes_enviados': 0,
+            'bytes_recebidos': 0
+        }
+
+        # Estatísticas de desempenho de download
+        self.estatisticas_download = defaultdict(list)  # {(chunk_size, num_peers, file_size): [tempos]}
 
         with open(neighbors_file, 'r') as f:
             for line in f:
@@ -29,17 +43,171 @@ class EacharePeer:
         self.server_socket.bind((address, port))
         self.server_socket.listen(5)
 
+        # Var para download em andamento
+        self.download_em_andamento = None
+        self.download_lock = threading.Lock()
+
     def increment_clock(self):
         with self.clock_lock:
             self.clock += 1
             print(f"=> Atualizando relogio para {self.clock}")
+
+    def update_peer_status(self, peer, status, pClock):
+        current = self.peers.get(peer)
+        if current:
+            if pClock > current["clock"]:
+                if current["status"] != status:
+                    print(f"Atualizando peer {peer} status {status} (clock {pClock})")
+                self.peers[peer] = {"status": status, "clock": pClock}
+        else:
+            print(f"Adicionando novo peer {peer} status {status} (clock {pClock})")
+            self.peers[peer] = {"status": status, "clock": pClock}
+            self.add_peer_to_neighbors_file(peer)
+
+    def send_message(self, destination, message):
+        try:
+            addr, port = destination.split(':')
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(2)
+                s.connect((addr, int(port)))
+                s.sendall(message.encode())
+                print(f"Encaminhando mensagem \"{message}\" para {destination}")
+
+                # Atualizar estatísticas de transferência
+                with self.clock_lock:
+                    self.estatisticas_transferencia['bytes_enviados'] += len(message)
+
+                self.update_peer_status(destination, "ONLINE", self.clock)
+        except Exception as e:
+            print(f"Erro ao conectar em {destination}: {str(e)}")
+            self.update_peer_status(destination, "OFFLINE", self.clock)
+
+    def create_peer_list_response(self, exclude_peer):
+        peer_list = []
+        for peer, info in self.peers.items():
+            if peer != exclude_peer:
+                peer_list.append(f"{peer}:{info['status']}:{info['clock']}")
+        return f"{self.full_address} {self.clock} PEER_LIST {len(peer_list)} {' '.join(peer_list)}"
+
+    def process_peer_list(self, peers_data):
+        count = int(peers_data[0])
+        for i in range(1, count + 1):
+            peer_info = peers_data[i].split(':')
+            peer_addr = f"{peer_info[0]}:{peer_info[1]}"
+            status = peer_info[2]
+            clock = int(peer_info[3])
+            self.add_peer(peer_addr)
+            self.update_peer_status(peer_addr, status, clock)
+
+    def is_peer_in_file(self, peer_address):
+        return peer_address in self.peers
+
+    def add_peer(self, peer_address):
+        if not self.is_peer_in_file(peer_address):
+            self.add_peer_to_neighbors_file(peer_address)
+
+    def add_peer_to_neighbors_file(self, peer_address):
+        with open(self.neighbors_file, 'a') as file:
+            file.write(f"\n{peer_address}")
+
+    def buscar_arquivos(self):
+        self.arquivos_recebidos = {}
+        self.increment_clock()
+        message = f"{self.full_address} {self.clock} LS"
+
+        # Enviar pedido LS para todos os peers online
+        for peer, info in self.peers.items():
+            if info["status"] == "ONLINE":
+                self.send_message(peer, message)
+
+        time.sleep(2)
+
+        # Agrupar arquivos por (nome, tamanho)
+        arquivos_agrupados = {}
+        for peer, arquivos in self.arquivos_recebidos.items():
+            for nome, tamanho in arquivos:
+                chave = (nome, tamanho)
+                if chave not in arquivos_agrupados:
+                    arquivos_agrupados[chave] = []
+                arquivos_agrupados[chave].append(peer)
+
+        # Converter para lista ordenada
+        lista_arquivos = []
+        for (nome, tamanho), peers in arquivos_agrupados.items():
+            lista_arquivos.append((nome, tamanho, peers))
+
+        # Exibir resultados
+        if not lista_arquivos:
+            print("Nenhum arquivo encontrado.")
+            return
+
+        print("\nArquivos encontrados na rede:")
+        print("     Nome        | Tamanho  | Peers")
+        for i, (nome, tamanho, peers) in enumerate(lista_arquivos, 1):
+            peers_str = ', '.join(peers)
+            print(f"[{i}]  {nome}  | {tamanho}      | {peers_str}")
+
+        print("[0] Cancelar")
+        escolha = int(input("> "))
+        if escolha == 0:
+            return
+
+        # Obter arquivo selecionado
+        arquivo_selecionado = lista_arquivos[escolha - 1]
+        nome_arquivo = arquivo_selecionado[0]
+        tamanho_arquivo = arquivo_selecionado[1]
+        peers_com_arquivo = arquivo_selecionado[2]
+
+        print(f"Você selecionou: {nome_arquivo} (tamanho: {tamanho_arquivo})")
+
+        # Iniciar download fragmentado
+        self.iniciar_download_fragmentado(nome_arquivo, tamanho_arquivo, peers_com_arquivo)
+
+    def iniciar_download_fragmentado(self, nome_arquivo, tamanho_arquivo, peers):
+        # Calcular número de chunks
+        num_chunks = math.ceil(tamanho_arquivo / self.chunk_size)
+
+        # Inicializar estrutura de download
+        with self.download_lock:
+            self.download_em_andamento = {
+                'nome_arquivo': nome_arquivo,
+                'tamanho': tamanho_arquivo,
+                'num_chunks': num_chunks,
+                'chunks_recebidos': 0,
+                'chunks': [None] * num_chunks,
+                'start_time': time.time(),
+                'peers': peers,  # Armazenar lista de peers para estatísticas
+                'chunk_size': self.chunk_size  # Armazenar tamanho de chunk usado
+            }
+
+        # Solicitar cada chunk
+        for chunk_index in range(num_chunks):
+            # Escolher peer (round-robin simples)
+            peer_index = chunk_index % len(peers)
+            peer_selecionado = peers[peer_index]
+
+            # Calcular tamanho real do chunk (último pode ser menor)
+            tamanho_chunk = self.chunk_size
+            if chunk_index == num_chunks - 1:
+                tamanho_chunk = tamanho_arquivo - (chunk_index * self.chunk_size)
+
+            self.increment_clock()
+            msg = f"{self.full_address} {self.clock} DL {nome_arquivo} {self.chunk_size} {chunk_index}"
+            self.send_message(peer_selecionado, msg)
+            print(f"Solicitando chunk {chunk_index} de {nome_arquivo} para {peer_selecionado}")
 
     def handle_message(self, conn, addr):
         data = conn.recv(1024 * 100).decode()
         if not data:
             return
 
-        print(f"Resposta recebida: \"{data}\"")
+        # Atualizar estatísticas de transferência
+        with self.clock_lock:
+            self.estatisticas_transferencia['bytes_recebidos'] += len(data)
+
+        # Mostrar apenas parte da mensagem para não poluir a saída
+        preview = data[:60] + "..." if len(data) > 60 else data
+        print(f"Resposta recebida: \"{preview}\"")
 
         parts = data.strip().split()
         origin = parts[0]
@@ -66,13 +234,116 @@ class EacharePeer:
             self.process_ls_list(origin, parts[3:])
         elif msg_type == "DL":
             filename = parts[3]
-            self.send_file_response(origin, filename)
+            chunk_size = int(parts[4])
+            chunk_index = int(parts[5])
+            self.enviar_chunk_arquivo(origin, filename, chunk_size, chunk_index)
         elif msg_type == "FILE":
             filename = parts[3]
-            encoded_data = parts[6]
-            self.save_downloaded_file(filename, encoded_data)
+            chunk_size = int(parts[4])
+            chunk_index = int(parts[5])
+            encoded_data = ' '.join(parts[6:])  # Juntar todos os tokens restantes
+            self.processar_chunk_recebido(filename, chunk_index, encoded_data)
 
         conn.close()
+
+    def enviar_chunk_arquivo(self, destination, filename, chunk_size, chunk_index):
+        caminho = os.path.join(self.shared_dir, filename)
+        try:
+            with open(caminho, 'rb') as f:
+                # Posicionar no início do chunk
+                f.seek(chunk_index * chunk_size)
+
+                # Ler o chunk (último pode ser menor)
+                data = f.read(chunk_size)
+                encoded = base64.b64encode(data).decode()
+
+                self.increment_clock()
+                msg = f"{self.full_address} {self.clock} FILE {filename} {chunk_size} {chunk_index} {encoded}"
+                self.send_message(destination, msg)
+
+                # Atualizar estatísticas de transferência
+                with self.clock_lock:
+                    self.estatisticas_transferencia['chunks_enviados'] += 1
+        except FileNotFoundError:
+            print(f"Arquivo {filename} não encontrado para envio")
+        except Exception as e:
+            print(f"Erro ao enviar chunk: {str(e)}")
+
+    def processar_chunk_recebido(self, filename, chunk_index, encoded_data):
+        with self.download_lock:
+            if not self.download_em_andamento or self.download_em_andamento['nome_arquivo'] != filename:
+                print(f"Chunk recebido para {filename}, mas não há download em andamento")
+                return
+
+            download = self.download_em_andamento
+
+            # Verificar se chunk já foi recebido
+            if download['chunks'][chunk_index] is not None:
+                print(f"Chunk {chunk_index} duplicado para {filename}")
+                return
+
+            # Decodificar e armazenar
+            try:
+                decoded_data = base64.b64decode(encoded_data.encode())
+                download['chunks'][chunk_index] = decoded_data
+                download['chunks_recebidos'] += 1
+
+                # Atualizar estatísticas de transferência
+                with self.clock_lock:
+                    self.estatisticas_transferencia['chunks_recebidos'] += 1
+                    self.estatisticas_transferencia['bytes_recebidos'] += len(encoded_data)
+
+                print(
+                    f"Chunk {chunk_index} de {filename} recebido ({download['chunks_recebidos']}/{download['num_chunks']})")
+
+                # Verificar se download está completo
+                if download['chunks_recebidos'] == download['num_chunks']:
+                    self.finalizar_download(filename)
+            except Exception as e:
+                print(f"Erro ao processar chunk: {str(e)}")
+
+    def finalizar_download(self, filename):
+        with self.download_lock:
+            if not self.download_em_andamento or self.download_em_andamento['nome_arquivo'] != filename:
+                return
+
+            download = self.download_em_andamento
+            caminho = os.path.join(self.shared_dir, filename)
+
+            try:
+                # Medir tempo ANTES de escrever o arquivo (conforme especificação)
+                tempo_total = time.time() - download['start_time']
+
+                # Escrever arquivo no disco
+                with open(caminho, 'wb') as f:
+                    for chunk in download['chunks']:
+                        f.write(chunk)
+
+                # Registrar estatísticas de desempenho
+                key = (
+                    download['chunk_size'],
+                    len(download['peers']),
+                    download['tamanho']
+                )
+                self.estatisticas_download[key].append(tempo_total)
+
+                print(f"\nDownload do arquivo {filename} finalizado em {tempo_total:.5f}s.")
+                print(f"Estatísticas registradas: chunk={download['chunk_size']}, "
+                      f"peers={len(download['peers'])}, size={download['tamanho']}")
+
+                # Resetar download
+                self.download_em_andamento = None
+            except Exception as e:
+                print(f"Erro ao salvar arquivo {filename}: {str(e)}")
+
+    def process_ls_list(self, peer, file_data):
+        self.update_peer_status(peer, "ONLINE", self.clock)
+        num = int(file_data[0])
+        arquivos = []
+        for i in range(1, num + 1):
+            nome, tamanho = file_data[i].split(':')
+            arquivos.append((nome, int(tamanho)))
+        self.arquivos_recebidos[peer] = arquivos
 
     def create_ls_list_response(self):
         arquivos = []
@@ -83,127 +354,65 @@ class EacharePeer:
                 arquivos.append(f"{f}:{tamanho}")
         return f"{self.full_address} {self.clock} LS_LIST {len(arquivos)} {' '.join(arquivos)}"
 
-    def process_ls_list(self, peer, file_data):
-        self.update_peer_status(peer, "ONLINE", self.clock) 
-        num = int(file_data[0])
-        arquivos = []
-        for i in range(1, num + 1):
-            nome, tamanho = file_data[i].split(':')
-            arquivos.append((nome, int(tamanho)))
-        self.arquivos_recebidos[peer] = arquivos
+    def alterar_chunk_size(self):
+        print("Digite novo tamanho de chunk:")
+        try:
+            novo_tamanho = int(input("> "))
+            if novo_tamanho <= 0:
+                print("Tamanho deve ser um número positivo.")
+                return
+            self.chunk_size = novo_tamanho
+            print(f"Tamanho de chunk alterado: {self.chunk_size}")
+        except ValueError:
+            print("Valor inválido. Deve ser um número inteiro.")
 
-    def buscar_arquivos(self):
-        self.arquivos_recebidos = {}
-        self.increment_clock()
-        message = f"{self.full_address} {self.clock} LS"
+    def exibir_estatisticas(self):
+        print("\n=== Estatísticas de Transferência ===")
+        print(f"Chunks enviados: {self.estatisticas_transferencia['chunks_enviados']}")
+        print(f"Chunks recebidos: {self.estatisticas_transferencia['chunks_recebidos']}")
+        print(f"Bytes enviados: {self.estatisticas_transferencia['bytes_enviados']}")
+        print(f"Bytes recebidos: {self.estatisticas_transferencia['bytes_recebidos']}")
 
-        for peer, info in self.peers.items():
-            if info["status"] == "ONLINE":
-                self.send_message(peer, message)
+        if self.download_em_andamento:
+            download = self.download_em_andamento
+            progresso = (download['chunks_recebidos'] / download['num_chunks']) * 100
+            print(f"\nDownload em andamento: {download['nome_arquivo']}")
+            print(f"Progresso: {progresso:.1f}% ({download['chunks_recebidos']}/{download['num_chunks']} chunks)")
+            tempo_decorrido = time.time() - download['start_time']
+            print(f"Tempo decorrido: {tempo_decorrido:.2f}s")
 
-        time.sleep(2)  # tempo para receber respostas
+        print("\n=== Estatísticas de Desempenho ===")
+        print("Tam. chunk | N peers | Tam. arquivo | N | Tempo [s] | Desvio")
 
-        todos_arquivos = []
-        for peer, arquivos in self.arquivos_recebidos.items():
-            for nome, tamanho in arquivos:
-                todos_arquivos.append((nome, tamanho, peer))
-
-        if not todos_arquivos:
-            print("Nenhum arquivo encontrado.")
+        if not self.estatisticas_download:
+            print("Nenhum dado estatístico de download disponível")
             return
 
-        print("\nArquivos encontrados na rede:")
-        print("     Nome        | Tamanho  | Peer ")
-        for i, (nome, tamanho, peer) in enumerate(todos_arquivos, 1):
-            print(f"[{i}]  {nome}  | {tamanho}      | {peer}")
+        # Processar e ordenar estatísticas
+        processed = []
+        for key, tempos in self.estatisticas_download.items():
+            chunk_size, num_peers, file_size = key
+            n = len(tempos)
+            media = sum(tempos) / n
+            variancia = sum((x - media) ** 2 for x in tempos) / n
+            desvio = math.sqrt(variancia) if n > 1 else 0.0
 
-        print("[0] Cancelar")
-        escolha = int(input("> "))
-        if escolha == 0:
-            return
+            processed.append((
+                chunk_size,
+                num_peers,
+                file_size,
+                n,
+                media,
+                desvio
+            ))
 
-        selecionado = todos_arquivos[escolha - 1]
-        print(f"Você selecionou: {selecionado[0]} de {selecionado[2]}")
+        # Ordenar por chunk_size, num_peers e file_size
+        processed.sort(key=lambda x: (x[0], x[1], x[2]))
 
-        self.increment_clock()
-        msg = f"{self.full_address} {self.clock} DL {selecionado[0]} 0 0"
-        self.send_message(selecionado[2], msg)
-
-    def send_file_response(self, destination, filename):
-        caminho = os.path.join(self.shared_dir, filename)
-        try:
-            with open(caminho, 'rb') as f:
-                data = f.read()
-                encoded = base64.b64encode(data).decode()
-                self.increment_clock()
-                msg = f"{self.full_address} {self.clock} FILE {filename} 0 0 {encoded}"
-                self.send_message(destination, msg)
-        except FileNotFoundError:
-            print(f"Arquivo {filename} não encontrado para envio")
-
-    def save_downloaded_file(self, filename, encoded_data):
-        try:
-            decoded = base64.b64decode(encoded_data.encode())
-            caminho = os.path.join(self.shared_dir, filename)
-            with open(caminho, 'wb') as f:
-                f.write(decoded)
-            print(f"Download do arquivo {filename} finalizado.")
-            self.start()
-        except Exception as e:
-            print(f"Erro ao salvar o arquivo {filename}: {str(e)}")
-
-    def update_peer_status(self, peer, status, pClock):
-        current = self.peers.get(peer)
-        if current:
-            if pClock > current["clock"]:
-                if current["status"] != status:
-                    print(f"Atualizando peer {peer} status {status} (clock {pClock})")
-                self.peers[peer] = {"status": status, "clock": pClock}
-        else:
-            print(f"Adicionando novo peer {peer} status {status} (clock {pClock})")
-            self.peers[peer] = {"status": status, "clock": pClock}
-            self.add_peer_to_neighbors_file(peer)
-
-    def send_message(self, destination, message):
-        try:
-            addr, port = destination.split(':')
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(2)
-                s.connect((addr, int(port)))
-                s.sendall(message.encode())
-                print(f"Encaminhando mensagem \"{message}\" para {destination}")
-                self.update_peer_status(destination, "ONLINE", self.clock)
-        except Exception as e:
-            print(f"Erro ao conectar em {destination}: {str(e)}")
-            self.update_peer_status(destination, "OFFLINE", self.clock)
-
-    def create_peer_list_response(self, exclude_peer):
-        peer_list = []
-        for peer, info in self.peers.items():
-            if peer != exclude_peer:
-                peer_list.append(f"{peer}:{info['status']}:{info['clock']}")
-        return f"{self.full_address} {self.clock} PEER_LIST {len(peer_list)} {' '.join(peer_list)}"
-
-    def process_peer_list(self, peers_data):
-        count = int(peers_data[0])
-        for i in range(1, count+1):
-            peer_info = peers_data[i].split(':')
-            peer_addr = f"{peer_info[0]}:{peer_info[1]}"
-            status = peer_info[2]
-            clock = int(peer_info[3])
-            self.add_peer(peer_addr)
-            self.update_peer_status(peer_addr, status, clock)
-
-    def is_peer_in_file(self, peer_address):
-        return peer_address in self.peers
-
-    def add_peer(self, peer_address):
-        if not self.is_peer_in_file(peer_address):
-            self.add_peer_to_neighbors_file(peer_address)
-
-    def add_peer_to_neighbors_file(self, peer_address):
-        with open(self.neighbors_file, 'a') as file:
-            file.write(f"\n{peer_address}")
+        # Exibir resultados formatados
+        for stat in processed:
+            chunk_size, num_peers, file_size, n, media, desvio = stat
+            print(f"{chunk_size:10d} | {num_peers:7d} | {file_size:12d} | {n:1d} | {media:.5f} | {desvio:.5f}")
 
     def list_peers(self):
         print("Lista de peers:")
@@ -216,7 +425,7 @@ class EacharePeer:
         if choice == 0:
             return
 
-        selected_peer = peers[choice-1][0]
+        selected_peer = peers[choice - 1][0]
         self.increment_clock()
         message = f"{self.full_address} {self.clock} HELLO"
         self.send_message(selected_peer, message)
@@ -244,8 +453,14 @@ class EacharePeer:
 
     def _listen(self):
         while self.running:
-            conn, addr = self.server_socket.accept()
-            threading.Thread(target=self.handle_message, args=(conn, addr)).start()
+            try:
+                conn, addr = self.server_socket.accept()
+                threading.Thread(target=self.handle_message, args=(conn, addr)).start()
+            except:
+                # Lidar com erros de socket ao encerrar
+                if self.running:
+                    print("Erro ao aceitar conexão")
+                pass
 
     def start(self):
         threading.Thread(target=self._listen, daemon=True).start()
@@ -255,7 +470,9 @@ class EacharePeer:
             print("[1] Listar peers")
             print("[2] Obter peers")
             print("[3] Listar arquivos locais")
-            print("[4] Buscar Arquivos")
+            print("[4] Buscar arquivos")
+            print("[5] Exibir estatisticas")
+            print("[6] Alterar tamanho de chunk")
             print("[9] Sair")
             choice = input("> ")
 
@@ -267,14 +484,20 @@ class EacharePeer:
                 self.list_local_files()
             elif choice == '4':
                 self.buscar_arquivos()
+            elif choice == '5':
+                self.exibir_estatisticas()
+            elif choice == '6':
+                self.alterar_chunk_size()
             elif choice == '9':
                 self.exit()
                 break
             else:
                 print("Comando inválido")
 
+
 if __name__ == "__main__":
     import sys
+
     if len(sys.argv) != 4:
         print("Uso: python eachare.py <endereco:porta> <vizinhos.txt> <diretorio_compartilhado>")
         sys.exit(1)
