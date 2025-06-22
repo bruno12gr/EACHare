@@ -342,11 +342,13 @@ class EacharePeer:
                     f"Chunk {chunk_index} de {filename} recebido ({download['chunks_recebidos']}/{download['num_chunks']})")
 
                 # Verificar se download está completo
-                if download['chunks_recebidos'] == download['num_chunks']:
+                chunks_nao_nulos = sum(1 for chunk in download['chunks'] if chunk is not None)
+                
+                if chunks_nao_nulos == download['num_chunks']:
                     print("Todos os chunks recebidos, finalizando download...")
                     self.finalizar_download(filename)
                 else:
-                    print(f"Faltam {download['num_chunks'] - download['chunks_recebidos']} chunks")
+                    print(f"Faltam {download['num_chunks'] - chunks_nao_nulos} chunks")
             except Exception as e:
                 print(f"Erro ao processar chunk: {str(e)}")
                 import traceback
@@ -355,57 +357,57 @@ class EacharePeer:
     def finalizar_download(self, filename):
         print(f"Iniciando finalização do download para {filename}")
 
-        with self.download_lock:
-            if not self.download_em_andamento or self.download_em_andamento['nome_arquivo'] != filename:
-                print(f"Finalizar download: nenhum download em andamento para {filename}.")
-                return
+        if not self.download_em_andamento or self.download_em_andamento['nome_arquivo'] != filename:
+            print(f"Finalizar download: nenhum download em andamento para {filename}.")
+            return
 
-            download = self.download_em_andamento
+        download = self.download_em_andamento
 
-            # Verificar se todos os chunks foram recebidos
-            if download['chunks_recebidos'] != download['num_chunks']:
-                print(f"Download incompleto! Recebidos {download['chunks_recebidos']}/{download['num_chunks']} chunks")
-                return
+        # Verificar se todos os chunks foram recebidos
+        chunks_nao_nulos = sum(1 for chunk in download['chunks'] if chunk is not None)
+        if chunks_nao_nulos != download['num_chunks']:
+            print(f"Download incompleto! Recebidos {chunks_nao_nulos}/{download['num_chunks']} chunks")
+            return
 
-            # Usar caminho absoluto para evitar problemas de diretório
-            caminho = os.path.abspath(os.path.join(self.shared_dir, filename))
-            print(f"Salvando arquivo em: {caminho}")
+        # Usar caminho absoluto para evitar problemas de diretório
+        caminho = os.path.abspath(os.path.join(self.shared_dir, filename))
+        print(f"Salvando arquivo em: {caminho}")
 
-            try:
-                tempo_total = time.time() - download['start_time']
+        try:
+            tempo_total = time.time() - download['start_time']
 
-                # Garantir que o diretório existe
-                os.makedirs(os.path.dirname(caminho), exist_ok=True)
+            # Garantir que o diretório existe
+            os.makedirs(os.path.dirname(caminho), exist_ok=True)
 
-                # Escrever arquivo
-                with open(caminho, 'wb') as f:
-                    for chunk in download['chunks']:
-                        if chunk is not None:
-                            f.write(chunk)
+            # Escrever arquivo
+            with open(caminho, 'wb') as f:
+                for chunk in download['chunks']:
+                    if chunk is not None:
+                        f.write(chunk)
 
-                # Verificar se o arquivo foi criado
-                if os.path.exists(caminho):
-                    file_size = os.path.getsize(caminho)
-                    print(f"Arquivo salvo com sucesso! Tamanho: {file_size} bytes")
+            # Verificar se o arquivo foi criado
+            if os.path.exists(caminho):
+                file_size = os.path.getsize(caminho)
+                print(f"Arquivo salvo com sucesso! Tamanho: {file_size} bytes")
 
-                    # Registrar estatísticas
-                    key = (
-                        download['chunk_size'],
-                        len(download['peers']),
-                        file_size  # Usar tamanho real do arquivo salvo
-                    )
-                    self.estatisticas_download[key].append(tempo_total)
+                # Registrar estatísticas
+                key = (
+                    download['chunk_size'],
+                    len(download['peers']),
+                    file_size  # Usar tamanho real do arquivo salvo
+                )
+                self.estatisticas_download[key].append(tempo_total)
 
-                    print(f"Download do arquivo {filename} finalizado em {tempo_total:.5f}s.")
-                else:
-                    print("Erro: Arquivo não foi criado após escrita!")
+                print(f"Download do arquivo {filename} finalizado em {tempo_total:.5f}s.")
+            else:
+                print("Erro: Arquivo não foi criado após escrita!")
 
-                # Resetar download
-                self.download_em_andamento = None
-            except Exception as e:
-                print(f"Erro crítico ao salvar arquivo {filename}: {str(e)}")
-                import traceback
-                traceback.print_exc()
+            # Resetar download
+            self.download_em_andamento = None
+        except Exception as e:
+            print(f"Erro crítico ao salvar arquivo {filename}: {str(e)}")
+            import traceback
+            traceback.print_exc()
 
     def process_ls_list(self, peer, file_data):
         self.update_peer_status(peer, "ONLINE", self.clock)
