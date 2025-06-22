@@ -190,8 +190,11 @@ class EacharePeer:
             peer_index = chunk_index % len(peers)
             peer_selecionado = peers[peer_index]
 
+            # Codificar o nome do arquivo em base64 para evitar problemas com espaços e acentos
+            filename_encoded = base64.b64encode(nome_arquivo.encode()).decode()
+
             self.increment_clock()
-            msg = f"{self.full_address} {self.clock} DL {nome_arquivo} {self.chunk_size} {chunk_index}"
+            msg = f"{self.full_address} {self.clock} DL {filename_encoded} {self.chunk_size} {chunk_index}"
             self.send_message(peer_selecionado, msg)
             print(f"Solicitando chunk {chunk_index} de {nome_arquivo} para {peer_selecionado}")
 
@@ -241,18 +244,34 @@ class EacharePeer:
                 if len(parts) < 6:
                     print("Mensagem DL mal formatada")
                     return
-                filename = parts[3]
+                filename_encoded = parts[3]
                 chunk_size = int(parts[4])
                 chunk_index = int(parts[5])
+                
+                # Decodificar o nome do arquivo de base64
+                try:
+                    filename = base64.b64decode(filename_encoded.encode()).decode()
+                except Exception as e:
+                    print(f"Erro ao decodificar nome do arquivo: {str(e)}")
+                    return
+                
                 self.enviar_chunk_arquivo(origin, filename, chunk_size, chunk_index)
             elif msg_type == "FILE":
                 if len(parts) < 7:
                     print("Mensagem FILE mal formatada")
                     return
-                filename = parts[3]
+                filename_encoded = parts[3]
                 chunk_size = int(parts[4])
                 chunk_index = int(parts[5])
                 encoded_data = ' '.join(parts[6:])  # Juntar todos os tokens restantes
+                
+                # Decodificar o nome do arquivo de base64
+                try:
+                    filename = base64.b64decode(filename_encoded.encode()).decode()
+                except Exception as e:
+                    print(f"Erro ao decodificar nome do arquivo: {str(e)}")
+                    return
+                
                 self.processar_chunk_recebido(filename, chunk_index, encoded_data)
 
         except Exception as e:
@@ -280,8 +299,11 @@ class EacharePeer:
 
                 encoded = base64.b64encode(data).decode()
 
+                # Codificar o nome do arquivo em base64 para a resposta
+                filename_encoded = base64.b64encode(filename.encode()).decode()
+
                 self.increment_clock()
-                msg = f"{self.full_address} {self.clock} FILE {filename} {chunk_size} {chunk_index} {encoded}"
+                msg = f"{self.full_address} {self.clock} FILE {filename_encoded} {chunk_size} {chunk_index} {encoded}"
                 self.send_message(destination, msg)
 
                 # Atualizar estatísticas de transferência
