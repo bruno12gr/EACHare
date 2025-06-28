@@ -12,7 +12,7 @@ por GRUPO 59 Alaina e Bruno
 
 ## Exemplo
 ### **Peer1**:
-	python3 eachare.py 127.0.0.1:9001 peers_peer1.txt shared_dir1
+	python eachare.py 127.0.0.1:9001 peers1.txt ./diretorio_compartilhado1
 
 ### **Peer2**:
 	python3 eachare.py 127.0.0.1:9002 peers_peer2.txt shared_dir2
